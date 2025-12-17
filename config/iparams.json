@@ -1,0 +1,16 @@
+{
+  "domain": {
+    "display_name": "Freshdesk Domain",
+    "description": "Your Freshdesk subdomain (e.g., if your URL is https://demoapp.freshdesk.com, enter 'demoapp')",
+    "type": "text",
+    "required": true,
+    "default_value": "demoapp"
+  },
+  "api_key": {
+    "display_name": "Freshdesk API Key",
+    "description": "Your Freshdesk API Key from Profile Settings",
+    "type": "text",
+    "required": true,
+    "secure": true
+  }
+}

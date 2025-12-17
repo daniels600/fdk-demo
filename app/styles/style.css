@@ -1,0 +1,27 @@
+html {
+  box-sizing: border-box;
+}
+
+*,
+*:after,
+*::before {
+  box-sizing: inherit;
+}
+
+.main {
+  display: flex;
+  flex-flow: column wrap;
+  justify-content: center;
+  align-items: center;
+}
+
+.button-container {
+  margin-top: 20px;
+  text-align: center;
+}
+
+#statusMessage {
+  margin-top: 10px;
+  font-weight: 500;
+  min-height: 20px;
+}

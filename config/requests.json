@@ -1,0 +1,40 @@
+{
+  "updateTicket": {
+    "schema": {
+      "method": "PUT",
+      "host": "<%= iparam.domain %>.freshdesk.com",
+      "path": "/api/v2/tickets/<%= context.ticket_id %>",
+      "headers": {
+        "Authorization": "Basic <%= encode(iparam.api_key + ':X') %>",
+        "Content-Type": "application/json"
+      }
+    }
+  },
+  "getTicketFields": {
+    "schema": {
+      "method": "GET",
+      "host": "<%= iparam.domain %>.freshdesk.com",
+      "path": "/api/v2/ticket_fields",
+      "headers": {
+        "Authorization": "Basic <%= encode(iparam.api_key + ':X') %>"
+      }
+    }
+  },
+  "getRandomJoke": {
+    "schema": {
+      "method": "GET",
+      "host": "official-joke-api.appspot.com",
+      "path": "/random_joke"
+    }
+  },
+  "createPost": {
+    "schema": {
+      "method": "POST",
+      "host": "jsonplaceholder.typicode.com",
+      "path": "/posts",
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
