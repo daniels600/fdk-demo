@@ -58,6 +58,37 @@ async function renderText() {
   if (createPostBtn) {
     createPostBtn.addEventListener('fwClick', createPostAndUpdate);
   }
+
+  // Add event listener for choices dropdown
+  const choicesDropdown = document.getElementById('choicesDropdown');
+  if (choicesDropdown) {
+    choicesDropdown.addEventListener('fwChange', async (event) => {
+      const selectedValue = event.detail.value;
+      if (selectedValue) {
+        await updateChoicesField(selectedValue);
+      }
+    });
+
+    // Load current Choices field value
+    try {
+      const ticketData = await client.data.get('ticket');
+      const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
+      const fields = JSON.parse(fieldsResponse.response);
+      const choicesField = fields.find(f => f.label === 'Choices');
+      
+      if (choicesField) {
+        const fieldName = choicesField.name;
+        const currentValue = ticketData.ticket.custom_fields?.[fieldName];
+        
+        if (currentValue) {
+          choicesDropdown.value = currentValue;
+          console.log('Loaded current Choices value:', currentValue);
+        }
+      }
+    } catch (error) {
+      console.log('Could not load current Choices value:', error);
+    }
+  }
 }
 
 async function addRandomWord() {
@@ -325,6 +356,80 @@ async function createPostAndUpdate() {
     console.error('Error message:', error.message);
     console.error('Error response:', error.response);
     statusMessage.innerHTML = `Error: ${error.message || 'Failed'}`;
+    statusMessage.style.color = 'red';
+  }
+}
+
+async function updateChoicesField(selectedValue) {
+  const statusMessage = document.getElementById('statusMessage');
+
+  statusMessage.innerHTML = 'Updating Choices...';
+  statusMessage.style.color = 'blue';
+
+  try {
+    // Get current ticket data
+    const ticketData = await client.data.get('ticket');
+    const ticketId = ticketData.ticket.id;
+
+    console.log('Ticket ID:', ticketId);
+    console.log('Selected value:', selectedValue);
+
+    // Get all ticket fields to find the custom field
+    const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
+    const fields = JSON.parse(fieldsResponse.response);
+    console.log('All ticket fields:', fields);
+
+    // Find custom field by label 'Choices'
+    const customField = fields.find(f => f.label === 'Choices');
+    console.log('Found custom field:', customField);
+
+    if (!customField) {
+      throw new Error('Custom field "Choices" not found');
+    }
+
+    // Use the actual field name from the API
+    const fieldName = customField.name;
+    console.log('Using field name:', fieldName);
+
+    // Prepare update payload
+    const updatePayload = {
+      custom_fields: {
+        [fieldName]: selectedValue
+      }
+    };
+
+    console.log('Sending update payload:', JSON.stringify(updatePayload, null, 2));
+
+    // Update via API
+    const updateResponse = await client.request.invokeTemplate('updateTicket', {
+      context: { ticket_id: ticketId },
+      body: JSON.stringify(updatePayload)
+    });
+
+    console.log('Update response:', updateResponse);
+
+    // Try to update UI immediately
+    try {
+      await client.interface.trigger("setValue", {
+        id: fieldName,
+        value: selectedValue
+      });
+    } catch (uiError) {
+      console.log('UI update not supported:', uiError);
+    }
+
+    statusMessage.innerHTML = `Choices updated to: ${selectedValue}`;
+    statusMessage.style.color = 'green';
+
+    setTimeout(() => {
+      statusMessage.innerHTML = '';
+    }, 5000);
+
+  } catch (error) {
+    console.error('Full error details:', error);
+    console.error('Error message:', error.message);
+    console.error('Error response:', error.response);
+    statusMessage.innerHTML = `Error: ${error.message || 'Update failed'}`;
     statusMessage.style.color = 'red';
   }
 }
