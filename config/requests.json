@@ -20,20 +20,13 @@
       }
     }
   },
-  "getRandomJoke": {
+  "queryNocoDB": {
     "schema": {
       "method": "GET",
-      "host": "official-joke-api.appspot.com",
-      "path": "/random_joke"
-    }
-  },
-  "createPost": {
-    "schema": {
-      "method": "POST",
-      "host": "jsonplaceholder.typicode.com",
-      "path": "/posts",
+      "host": "app.nocodb.com",
+      "path": "/api/v2/tables/moeo293n3g8bj7k/records?where=(eurocode,eq,<%= context.eurocode %>)",
       "headers": {
-        "Content-Type": "application/json"
+        "xc-token": "<%= iparam.nocodb_token %>"
       }
     }
   }

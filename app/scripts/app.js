@@ -1,4 +1,279 @@
 let client;
+let listenersInitialized = false;
+
+function escapeHtml(unsafe) {
+  if (unsafe === null || unsafe === undefined) return '';
+  return String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+const VIN_EUROCODE_PREFIXES = {
+  '1F': ['35', '37', 'AF'],
+  '2F': ['35', '37', 'AF'],
+  '3F': ['35', '37', 'AF'],
+  '4JG': ['53', '54', '55', 'CM'],
+  '5X': ['44', '41'],
+  'ABM': ['23', '24'],
+  'KM': ['44', '41'],
+  'KN': ['44', '41'],
+  'MAL': ['44', '41'],
+  'NLH': ['44', '41'],
+  'NLJ': ['44', '41'],
+  'NM0': ['35', '37', 'AF'],
+  'SA': ['70', '43'],
+  'SJN': ['59', '60', '61'],
+  'TMA': ['44', '41'],
+  'U5': ['44', '41'],
+  'U6': ['44', '41'],
+  'UU1': ['70', '72', '73', '93'],
+  'VF1': ['70', '72', '73', '93'],
+  'VF3': ['65'],
+  'VF6': ['70', '72', '73', '93'],
+  'VF7': ['27'],
+  'VR1': ['27'],
+  'VR3': ['65'],
+  'VR7': ['27'],
+  'VS6': ['35', '37', 'AF'],
+  'VX': ['62', '63'],
+  'W0L': ['62', '63'],
+  'W0V': ['62', '63'],
+  'W1N': ['53', '54', '55', 'CM'],
+  'W1T': ['53', '54', '55', 'CM'],
+  'W1V': ['53', '54', '55', 'CM'],
+  'WBA': ['23', '24'],
+  'WBS': ['23', '24'],
+  'WBX': ['23', '24'],
+  'WBY': ['23', '24'],
+  'WD3': ['53', '54', '55', 'CM'],
+  'WD4': ['53', '54', '55', 'CM'],
+  'WDA': ['53', '54', '55', 'CM'],
+  'WDB': ['53', '54', '55', 'CM'],
+  'WDC': ['53', '54', '55', 'CM'],
+  'WDD': ['53', '54', '55', 'CM'],
+  'WDF': ['53', '54', '55', 'CM'],
+  'WF0': ['35', '37', 'AF'],
+  'WMW': ['23', '24'],
+  'WMX': ['53', '54', '55', 'CM'],
+  'WMZ': ['23', '24'],
+  'WP': ['67'],
+  'WV': ['8'],
+  'YV1': ['88'],
+  'ZAR': ['20'],
+  'ZFA': ['33', '37']
+};
+
+const VALIDATION_RULES = {
+  clientContext: {
+    name: 'Client Context',
+    description: 'Reports the customer context for the lookup',
+    check: (eurocode, oem, clientName, industry, record, vin) => {
+      void eurocode;
+      void oem;
+      void record;
+      const customer = clientName || 'Unknown';
+      const ind = industry || 'Standard';
+      const vinDisplay = vin || 'N/A';
+      return { valid: true, info: `Customer: ${customer} | Industry: ${ind} | VIN: ${vinDisplay}` };
+    }
+  },
+
+  wrongEurocode: {
+    name: 'Wrong Eurocode Check',
+    description: 'Rejects eurocodes containing exclamation mark',
+    check: (eurocode) => {
+      if (eurocode.includes('!')) {
+        return { valid: false, error: 'Invalid eurocode: contains "!" character' };
+      }
+      return { valid: true };
+    }
+  },
+
+  noNPrefix: {
+    name: 'N Prefix Master Rule',
+    description: 'Eurocode cannot start with N (except AGC clients, does not apply to US industry)',
+    check: (eurocode, oem, clientName, industry) => {
+      void oem;
+      if (industry === 'US') {
+        return { valid: true };
+      }
+      const normalizedClientName = (clientName || '').toUpperCase();
+      if (normalizedClientName === 'AGC') {
+        return { valid: true };
+      }
+      if (eurocode.toUpperCase().startsWith('N')) {
+        return { valid: false, error: 'Eurocode cannot start with "N" (Master Rule)' };
+      }
+      return { valid: true };
+    }
+  },
+
+  doubleOem: {
+    name: 'Double OEM Check',
+    description: 'Rejects if OEM is X and eurocode is also X',
+    check: (eurocode, oem) => {
+      if (oem === 'X' && eurocode === 'X') {
+        return { valid: false, error: 'Double OEM validation failed: both OEM and Eurocode are X' };
+      }
+      return { valid: true };
+    }
+  },
+
+  carglass: {
+    name: 'CARGLASS Position Check',
+    description: 'For CARGLASS clients, validates 5th character is position indicator',
+    check: (eurocode, oem, clientName) => {
+      void oem;
+      const normalizedClientName = (clientName || '').toUpperCase();
+      if (normalizedClientName !== 'CARGLASS') {
+        return { valid: true };
+      }
+      if (eurocode.length < 5) {
+        return { valid: false, error: 'CARGLASS validation: Eurocode too short (must be at least 5 characters)' };
+      }
+      const positionChars = { A: 'FRONT', C: 'FRONT', F: 'SIDE', L: 'SIDE', R: 'SIDE', B: 'BACK', G: 'ROOF' };
+      const fifthChar = eurocode.charAt(4).toUpperCase();
+      const position = positionChars[fifthChar];
+      if (!position) {
+        return { valid: false, error: `CARGLASS validation: 5th character "${fifthChar}" is not a valid position (need A/C/F/L/R/B/G)` };
+      }
+      return { valid: true, info: `Customer is CARGLASS, position: ${position} (char: ${fifthChar})` };
+    }
+  },
+
+  agc: {
+    name: 'AGC Safety Check',
+    description: 'For AGC clients, rejects if OEM/EC contains "/" or starts with "N"',
+    check: (eurocode, oem, clientName) => {
+      const normalizedClientName = (clientName || '').toUpperCase();
+      if (normalizedClientName !== 'AGC') {
+        return { valid: true };
+      }
+      if (eurocode.includes('/') || oem.includes('/')) {
+        return { valid: false, error: 'AGC validation: Eurocode/OEM cannot contain "/" character' };
+      }
+      if (eurocode.toUpperCase().startsWith('N')) {
+        return { valid: false, error: 'AGC validation: Eurocode cannot start with "N"' };
+      }
+      if (oem.toUpperCase().startsWith('N')) {
+        return { valid: false, error: 'AGC validation: OEM cannot start with "N"' };
+      }
+      return { valid: true, info: 'Customer is AGC, safety checks passed' };
+    }
+  },
+
+  usIndustry: {
+    name: 'US Industry Autofill',
+    description: 'For US industry, autofills with NAGS if available',
+    check: (eurocode, oem, clientName, industry, record) => {
+      void oem;
+      void clientName;
+      if (industry !== 'US') {
+        return { valid: true };
+      }
+      if (record && record.Nags) {
+        return { valid: true, transformed: record.Nags, info: `US industry detected, using NAGS code: ${record.Nags}` };
+      }
+      return { valid: true, transformed: eurocode, info: 'US industry detected, no NAGS available - using Eurocode' };
+    }
+  },
+
+  oemPrefix: {
+    name: 'OEM "A" Prefix Handling',
+    description: 'Handles leading "A" prefix in OEM values',
+    check: (eurocode, oem) => {
+      void eurocode;
+      if (oem.startsWith('A') && oem.length > 1) {
+        return { valid: true, info: `OEM has "A" prefix (${oem})` };
+      }
+      return { valid: true };
+    }
+  },
+
+  vinEurocodeValidation: {
+    name: 'VIN-Eurocode Prefix Validation',
+    description: 'Validates Eurocode prefix matches VIN prefix rules (not for US industry)',
+    check: (eurocode, oem, clientName, industry, record, vin) => {
+      void oem;
+      void clientName;
+      void record;
+      if (industry === 'US') {
+        return { valid: true, info: 'VIN validation skipped (US industry)' };
+      }
+      if (!vin || vin.length < 2) {
+        return { valid: true, info: 'VIN validation skipped (no VIN in ticket subject)' };
+      }
+      const vinUpper = vin.toUpperCase();
+      const ecUpper = eurocode.toUpperCase();
+      let matchedVinPrefix = null;
+      let validEcPrefixes = null;
+      const vinPrefixes = Object.keys(VIN_EUROCODE_PREFIXES).sort((a, b) => b.length - a.length);
+      for (const vinPrefix of vinPrefixes) {
+        if (vinUpper.startsWith(vinPrefix)) {
+          matchedVinPrefix = vinPrefix;
+          validEcPrefixes = VIN_EUROCODE_PREFIXES[vinPrefix];
+          break;
+        }
+      }
+      if (!matchedVinPrefix) {
+        return { valid: true, info: `VIN "${vin}" has no specific prefix rules` };
+      }
+      const allValidPrefixes = [...validEcPrefixes, 'F', 'D'];
+      const ecStartsWithValid = allValidPrefixes.some(prefix => ecUpper.startsWith(prefix));
+      if (!ecStartsWithValid) {
+        return {
+          valid: false,
+          error: `VIN "${matchedVinPrefix}" requires Eurocode to start with: ${allValidPrefixes.join(', ')}. Got: "${ecUpper.substring(0, 4)}"`
+        };
+      }
+      const matchedEcPrefix = allValidPrefixes.find(prefix => ecUpper.startsWith(prefix));
+      return { valid: true, info: `VIN ${matchedVinPrefix} → Eurocode prefix "${matchedEcPrefix}" valid` };
+    }
+  }
+};
+
+function applyValidationRules(eurocode, oem, clientName, industry, record, vin) {
+  const errors = [];
+  const warnings = [];
+  const infos = [];
+  let transformedValue = oem;
+  let hasTransformation = false;
+
+  for (const rule of Object.values(VALIDATION_RULES)) {
+    const result = rule.check(eurocode, oem, clientName, industry, record, vin);
+
+    if (!result.valid) {
+      errors.push(`[${rule.name}] ${result.error}`);
+    }
+
+    if (result.warning) {
+      warnings.push(`[${rule.name}] ${result.warning}`);
+    }
+
+    if (result.info) {
+      infos.push(result.info);
+    }
+
+    if (result.transformed) {
+      if (hasTransformation) {
+        warnings.push(`[${rule.name}] Overriding previous transformation with: ${result.transformed}`);
+      }
+      transformedValue = result.transformed;
+      hasTransformation = true;
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    infos,
+    transformedValue
+  };
+}
 
 init();
 
@@ -7,25 +282,6 @@ async function init() {
   client.events.on('app.activated', renderText);
 }
 
-// Array of random words
-const randomWords = [
-  'Innovation',
-  'Excellence',
-  'Collaboration',
-  'Creativity',
-  'Resilience',
-  'Productivity',
-  'Growth',
-  'Success',
-  'Leadership',
-  'Quality',
-  'Efficiency',
-  'Teamwork',
-  'Vision',
-  'Strategy',
-  'Achievement'
-];
-
 async function renderText() {
   const textElement = document.getElementById('apptext');
   const contactData = await client.data.get('contact');
@@ -33,318 +289,143 @@ async function renderText() {
     contact: { name }
   } = contactData;
 
-  textElement.innerHTML = `Ticket is created by ${name}`;
+  // Log all available ticket properties
+  const ticketData = await client.data.get('ticket');
+  console.log('=== TICKET DATA ===');
+  console.log('Full ticket object:', ticketData);
+  console.log('Ticket properties:', ticketData.ticket);
+  console.log('Custom fields:', ticketData.ticket.custom_fields);
+  console.log('===================');
 
-  // Add event listener for description button
-  const adviceBtn = document.getElementById('adviceBtn');
-  if (adviceBtn) {
-    adviceBtn.addEventListener('fwClick', addRandomWord);
-  }
+  // Also log contact data for reference
+  console.log('=== CONTACT DATA ===');
+  console.log('Full contact object:', contactData);
+  console.log('Contact properties:', contactData.contact);
+  console.log('====================');
 
-  // Add event listener for priority button
-  const priorityBtn = document.getElementById('priorityBtn');
-  if (priorityBtn) {
-    priorityBtn.addEventListener('fwClick', changePriority);
-  }
+  textElement.textContent = `Ticket is created by ${name}`;
 
-  // Add event listener for custom field button
-  const customFieldBtn = document.getElementById('customFieldBtn');
-  if (customFieldBtn) {
-    customFieldBtn.addEventListener('fwClick', updateCustomField);
-  }
-
-  // Add event listener for create post button
-  const createPostBtn = document.getElementById('createPostBtn');
-  if (createPostBtn) {
-    createPostBtn.addEventListener('fwClick', createPostAndUpdate);
-  }
-
-  // Add event listener for choices dropdown
-  const choicesDropdown = document.getElementById('choicesDropdown');
-  if (choicesDropdown) {
-    choicesDropdown.addEventListener('fwChange', async (event) => {
-      const selectedValue = event.detail.value;
-      if (selectedValue) {
-        await updateChoicesField(selectedValue);
-      }
-    });
-
-    // Load current Choices field value
-    try {
-      const ticketData = await client.data.get('ticket');
-      const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
-      const fields = JSON.parse(fieldsResponse.response);
-      const choicesField = fields.find(f => f.label === 'Choices');
-      
-      if (choicesField) {
-        const fieldName = choicesField.name;
-        const currentValue = ticketData.ticket.custom_fields?.[fieldName];
-        
-        if (currentValue) {
-          choicesDropdown.value = currentValue;
-          console.log('Loaded current Choices value:', currentValue);
-        }
-      }
-    } catch (error) {
-      console.log('Could not load current Choices value:', error);
-    }
-  }
-}
-
-async function addRandomWord() {
-  const statusMessage = document.getElementById('statusMessage');
-
-  statusMessage.innerHTML = 'Adding word...';
-  statusMessage.style.color = 'blue';
-
-  try {
-    // Get random word from array
-    const randomWord = randomWords[Math.floor(Math.random() * randomWords.length)];
-
-    // Get current ticket data
-    const ticketData = await client.data.get('ticket');
-    const ticketId = ticketData.ticket.id;
-    const currentDescription = ticketData.ticket.description || '';
-
-    // Append random word to ticket description
-    const newDescription = `${currentDescription}\n\nRandom Word: ${randomWord}`;
-
-    // Update ticket description
-    await client.request.invokeTemplate('updateTicket', {
-      context: { ticket_id: ticketId },
-      body: JSON.stringify({ description: newDescription })
-    });
-
-    statusMessage.innerHTML = `Added: ${randomWord}`;
-    statusMessage.style.color = 'green';
-
-    setTimeout(() => {
-      statusMessage.innerHTML = '';
-    }, 5000);
-
-  } catch (error) {
-    console.error('Error adding random word:', error);
-    statusMessage.innerHTML = `Error: ${error.message || 'Failed'}`;
-    statusMessage.style.color = 'red';
-  }
-}
-
-async function changePriority() {
-  const statusMessage = document.getElementById('statusMessage');
-
-  statusMessage.innerHTML = 'Updating...';
-  statusMessage.style.color = 'blue';
-
-  try {
-    // Priority options: 1=Low, 2=Medium, 3=High, 4=Urgent
-    const priorities = [
-      { value: 1, name: 'Low' },
-      { value: 2, name: 'Medium' },
-      { value: 3, name: 'High' },
-      { value: 4, name: 'Urgent' }
-    ];
-
-    // Pick a random priority
-    const randomPriority = priorities[Math.floor(Math.random() * priorities.length)];
-
-    // Get current ticket data
-    const ticketData = await client.data.get('ticket');
-    const ticketId = ticketData.ticket.id;
-
-    // Update ticket priority via API (saves to database)
-    await client.request.invokeTemplate('updateTicket', {
-      context: { ticket_id: ticketId },
-      body: JSON.stringify({ priority: randomPriority.value })
-    });
-
-    // Update UI immediately without page refresh using interface method
-    await client.interface.trigger("setValue", {
-      id: "priority",
-      value: randomPriority.value
-    });
-
-    statusMessage.innerHTML = `Priority: ${randomPriority.name}`;
-    statusMessage.style.color = 'green';
-
-    setTimeout(() => {
-      statusMessage.innerHTML = '';
-    }, 5000);
-
-  } catch (error) {
-    console.error('Error changing priority:', error);
-    statusMessage.innerHTML = `Error: ${error.message || 'Failed'}`;
-    statusMessage.style.color = 'red';
-  }
-}
-
-async function updateCustomField() {
-  const statusMessage = document.getElementById('statusMessage');
-
-  statusMessage.innerHTML = 'Getting joke...';
-  statusMessage.style.color = 'blue';
-
-  try {
-    // Call external joke API
-    const jokeResponse = await client.request.invokeTemplate('getRandomJoke');
-    const joke = JSON.parse(jokeResponse.response);
-
-    console.log('Joke API response:', joke);
-
-    // Combine setup and punchline
-    const jokeText = `${joke.setup} - ${joke.punchline}`;
-    console.log('Joke text:', jokeText);
-
-    // Get current ticket data
-    const ticketData = await client.data.get('ticket');
-    const ticketId = ticketData.ticket.id;
-
-    console.log('Ticket ID:', ticketId);
-
-    // Get all ticket fields to find the custom field
-    const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
-    const fields = JSON.parse(fieldsResponse.response);
-    console.log('All ticket fields:', fields);
-
-    // Find custom field by label 'cf_random_word'
-    const customField = fields.find(f => f.label === 'Jokes' || f.name === "cf_cf_random_word");
-    console.log('Found custom field:', customField);
-
-    if (!customField) {
-      throw new Error('Custom field not found');
+  if (!listenersInitialized) {
+    const lookupEurocodeBtn = document.getElementById('lookupEurocodeBtn');
+    if (lookupEurocodeBtn) {
+      lookupEurocodeBtn.addEventListener('fwClick', lookupEurocode);
     }
 
-    // Use the actual field name from the API
-    const fieldName = customField.name;
-    console.log('Using field name:', fieldName);
-
-    // Prepare update payload
-    const updatePayload = {
-      custom_fields: {
-        [fieldName]: jokeText
-      }
-    };
-
-    console.log('Sending update payload:', JSON.stringify(updatePayload, null, 2));
-
-    // Update via API
-    const updateResponse = await client.request.invokeTemplate('updateTicket', {
-      context: { ticket_id: ticketId },
-      body: JSON.stringify(updatePayload)
-    });
-
-    console.log('Update response:', updateResponse);
-
-    // Try to update UI immediately
-    try {
-      await client.interface.trigger("setValue", {
-        id: fieldName,
-        value: jokeText
-      });
-    } catch (uiError) {
-      console.log('UI update not supported:', uiError);
+    const closeTicketBtn = document.getElementById('closeTicketBtn');
+    if (closeTicketBtn) {
+      closeTicketBtn.addEventListener('fwClick', closeTicket);
     }
-
-    statusMessage.innerHTML = `Joke added!`;
-    statusMessage.style.color = 'green';
-
-    setTimeout(() => {
-      statusMessage.innerHTML = '';
-    }, 5000);
-
-  } catch (error) {
-    console.error('Full error details:', error);
-    console.error('Error message:', error.message);
-    console.error('Error response:', error.response);
-    statusMessage.innerHTML = `Error: ${error.message || 'Update failed'}`;
-    statusMessage.style.color = 'red';
+    listenersInitialized = true;
   }
 }
 
-async function createPostAndUpdate() {
+async function lookupEurocode() {
   const statusMessage = document.getElementById('statusMessage');
-  const inputElement = document.getElementById('postTitleInput');
+  const inputElement = document.getElementById('eurocodeInput');
+  const infoDisplay = document.getElementById('infoDisplay');
+  const lookupBtn = document.getElementById('lookupEurocodeBtn');
+  const eurocode = inputElement.value.trim();
 
-  statusMessage.innerHTML = 'Creating post...';
+  if (!eurocode) {
+    statusMessage.textContent = 'Please enter a Eurocode';
+    statusMessage.style.color = 'orange';
+    return;
+  }
+
+  const MAX_EUROCODE_LENGTH = 50;
+  if (eurocode.length > MAX_EUROCODE_LENGTH) {
+    statusMessage.textContent = `Eurocode too long (max ${MAX_EUROCODE_LENGTH} characters)`;
+    statusMessage.style.color = 'orange';
+    return;
+  }
+
+  const eurocodePattern = /^[A-Za-z0-9\-_]+$/;
+  if (!eurocodePattern.test(eurocode)) {
+    statusMessage.textContent = 'Invalid Eurocode format (only letters, numbers, hyphens, underscores allowed)';
+    statusMessage.style.color = 'orange';
+    return;
+  }
+
+  lookupBtn.disabled = true;
+  statusMessage.textContent = 'Looking up Eurocode...';
   statusMessage.style.color = 'blue';
 
   try {
-    // Get input value from the fw-input component
-    const title = inputElement.value;
+    const contactData = await client.data.get('contact');
+    const clientName = contactData.contact.company_name || '';
 
-    if (!title || title.trim() === '') {
-      statusMessage.innerHTML = 'Please enter a title';
+    const ticketData = await client.data.get('ticket');
+    const vin = ticketData.ticket.subject || '';
+
+    const response = await client.request.invokeTemplate('queryNocoDB', {
+      context: { eurocode: encodeURIComponent(eurocode) }
+    });
+    const data = JSON.parse(response.response);
+
+    if (!data.list || data.list.length === 0) {
+      statusMessage.textContent = 'No matching Eurocode found';
       statusMessage.style.color = 'orange';
+      infoDisplay.innerHTML = '';
       return;
     }
 
-    console.log('Creating post with title:', title);
+    const record = data.list[0];
+    const oem = record.OEM1 || '';
+    const industry = record.Industry || '';
 
-    // Make POST request to JSONPlaceholder API
-    const postResponse = await client.request.invokeTemplate('createPost', {
-      body: JSON.stringify({ title: title })
-    });
-
-    const postData = JSON.parse(postResponse.response);
-    console.log('Post created:', postData);
-
-    const postId = postData.id;
-    const postTitle = postData.title;
-    console.log('Post ID:', postId);
-
-    // Get current ticket data
-    const ticketData = await client.data.get('ticket');
-    const ticketId = ticketData.ticket.id;
-
-    console.log('Ticket ID:', ticketId);
-
-    // Get all ticket fields to find the custom field
-    const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
-    const fields = JSON.parse(fieldsResponse.response);
-    console.log('All ticket fields:', fields);
-
-    // Find custom field by label 'Jokes' or name 'cf_cf_random_word'
-    const customField = fields.find(f => f.label === 'API' || f.name === "cf_api");
-    console.log('Found custom field:', customField);
-
-    if (!customField) {
-      throw new Error('Custom field not found');
+    if (!oem) {
+      statusMessage.textContent = 'Eurocode found but no OEM1 available';
+      statusMessage.style.color = 'orange';
+      infoDisplay.innerHTML = `<strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>OEM1:</strong> N/A`;
+      return;
     }
 
-    // Use the actual field name from the API
-    const fieldName = customField.name;
-    console.log('Using field name:', fieldName);
+    const validation = applyValidationRules(eurocode, oem, clientName, industry, record, vin);
 
-    // Prepare update payload with the post ID and title
+    if (!validation.valid) {
+      statusMessage.innerHTML = escapeHtml(validation.errors.join('\n')).replace(/\n/g, '<br>');
+      statusMessage.style.color = 'red';
+      infoDisplay.innerHTML = `<strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>OEM1:</strong> ${escapeHtml(oem)}<br><strong>Status:</strong> Validation failed`;
+      return;
+    }
+
+    const displayValue = validation.transformedValue;
+    let infoHtml = `<strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>OEM1:</strong> ${escapeHtml(displayValue)}`;
+    if (validation.infos.length > 0) {
+      const infosHtml = validation.infos.map(i => `• ${escapeHtml(i)}`).join('<br>');
+      infoHtml += `<br><br><span style="color: #666; font-size: 11px;">${infosHtml}</span>`;
+    }
+    infoDisplay.innerHTML = infoHtml;
+
+    const ticket = ticketData.ticket;
+
     const updatePayload = {
       custom_fields: {
-        [fieldName]: `Post: ${postId}-${postTitle}`
+        cf_api: displayValue
       }
     };
 
-    console.log('Sending update payload:', JSON.stringify(updatePayload, null, 2));
-
-    // Update via API
-    const updateResponse = await client.request.invokeTemplate('updateTicket', {
-      context: { ticket_id: ticketId },
+    await client.request.invokeTemplate('updateTicket', {
+      context: { ticket_id: ticket.id },
       body: JSON.stringify(updatePayload)
     });
 
-    console.log('Update response:', updateResponse);
-
-    // Try to update UI immediately
     try {
       await client.interface.trigger("setValue", {
-        id: fieldName,
-        value: `Post: ${postId}-${postTitle}`
+        id: "cf_api",
+        value: displayValue
       });
     } catch (uiError) {
-      console.log('UI update not supported:', uiError);
+      // UI setValue not supported in this context
     }
 
-    statusMessage.innerHTML = `Post created! ID: ${postId}`;
+    let successMsg = `Updated cf_api with: ${escapeHtml(displayValue)}`;
+    if (validation.warnings.length > 0) {
+      const warningsHtml = validation.warnings.map(w => escapeHtml(w)).join('<br>');
+      successMsg += `<br><small style="color: orange;">${warningsHtml}</small>`;
+    }
+    statusMessage.innerHTML = successMsg;
     statusMessage.style.color = 'green';
-
-    // Clear input field
     inputElement.value = '';
 
     setTimeout(() => {
@@ -352,84 +433,101 @@ async function createPostAndUpdate() {
     }, 5000);
 
   } catch (error) {
-    console.error('Full error details:', error);
-    console.error('Error message:', error.message);
-    console.error('Error response:', error.response);
-    statusMessage.innerHTML = `Error: ${error.message || 'Failed'}`;
+    console.error('Eurocode lookup error:', error);
+
+    let errorMsg = 'Lookup failed';
+    if (error.response) {
+      try {
+        const errData = JSON.parse(error.response);
+        errorMsg = errData.message || errData.description || errorMsg;
+      } catch (e) {
+        // Use default error message
+      }
+    }
+    statusMessage.textContent = `Error: ${errorMsg}`;
     statusMessage.style.color = 'red';
+  } finally {
+    lookupBtn.disabled = false;
   }
 }
 
-async function updateChoicesField(selectedValue) {
+async function closeTicket() {
   const statusMessage = document.getElementById('statusMessage');
+  const closeBtn = document.getElementById('closeTicketBtn');
 
-  statusMessage.innerHTML = 'Updating Choices...';
+  closeBtn.disabled = true;
+  statusMessage.textContent = 'Closing ticket...';
   statusMessage.style.color = 'blue';
 
   try {
-    // Get current ticket data
     const ticketData = await client.data.get('ticket');
-    const ticketId = ticketData.ticket.id;
+    const ticket = ticketData.ticket;
 
-    console.log('Ticket ID:', ticketId);
-    console.log('Selected value:', selectedValue);
-
-    // Get all ticket fields to find the custom field
-    const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
-    const fields = JSON.parse(fieldsResponse.response);
-    console.log('All ticket fields:', fields);
-
-    // Find custom field by label 'Choices'
-    const customField = fields.find(f => f.label === 'Choices');
-    console.log('Found custom field:', customField);
-
-    if (!customField) {
-      throw new Error('Custom field "Choices" not found');
+    if (ticket.status === 5) {
+      statusMessage.textContent = 'Ticket is already closed';
+      statusMessage.style.color = 'orange';
+      return;
     }
 
-    // Use the actual field name from the API
-    const fieldName = customField.name;
-    console.log('Using field name:', fieldName);
+    const fieldsResponse = await client.request.invokeTemplate('getTicketFields');
+    const fields = JSON.parse(fieldsResponse.response);
 
-    // Prepare update payload
-    const updatePayload = {
-      custom_fields: {
-        [fieldName]: selectedValue
+    const apiField = fields.find(f => f.label === 'API' || f.name === 'cf_api');
+
+    const updatePayload = { status: 5 };
+
+    if (apiField) {
+      const fieldName = apiField.name;
+      const currentValue = ticket.custom_fields?.[fieldName];
+
+      if (!currentValue || currentValue.trim() === '') {
+        updatePayload.custom_fields = {
+          [fieldName]: 'Closed via app'
+        };
       }
-    };
+    }
 
-    console.log('Sending update payload:', JSON.stringify(updatePayload, null, 2));
-
-    // Update via API
-    const updateResponse = await client.request.invokeTemplate('updateTicket', {
-      context: { ticket_id: ticketId },
+    await client.request.invokeTemplate('updateTicket', {
+      context: { ticket_id: ticket.id },
       body: JSON.stringify(updatePayload)
     });
 
-    console.log('Update response:', updateResponse);
-
-    // Try to update UI immediately
     try {
       await client.interface.trigger("setValue", {
-        id: fieldName,
-        value: selectedValue
+        id: "status",
+        value: 5
       });
     } catch (uiError) {
-      console.log('UI update not supported:', uiError);
+      // UI update not supported in this context
     }
 
-    statusMessage.innerHTML = `Choices updated to: ${selectedValue}`;
+    statusMessage.textContent = 'Ticket closed!';
     statusMessage.style.color = 'green';
 
     setTimeout(() => {
-      statusMessage.innerHTML = '';
+      statusMessage.textContent = '';
     }, 5000);
 
   } catch (error) {
-    console.error('Full error details:', error);
-    console.error('Error message:', error.message);
-    console.error('Error response:', error.response);
-    statusMessage.innerHTML = `Error: ${error.message || 'Update failed'}`;
+    console.error('Error closing ticket:', error);
+
+    let errorMsg = 'Failed to close';
+    if (error.response) {
+      try {
+        const errData = JSON.parse(error.response);
+        if (errData.description) {
+          errorMsg = errData.description;
+        } else if (errData.errors) {
+          errorMsg = Object.values(errData.errors).flat().join(', ');
+        }
+      } catch (e) {
+        // Use default error message
+      }
+    }
+
+    statusMessage.textContent = `Error: ${errorMsg}`;
     statusMessage.style.color = 'red';
+  } finally {
+    closeBtn.disabled = false;
   }
 }

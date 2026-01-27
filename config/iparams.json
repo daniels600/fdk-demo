@@ -1,14 +1,21 @@
 {
   "domain": {
     "display_name": "Freshdesk Domain",
-    "description": "Your Freshdesk subdomain (e.g., if your URL is https://demoapp.freshdesk.com, enter 'demoapp')",
+    "description": "Your Freshdesk subdomain (e.g., if your URL is https://cell7health.freshdesk.com, enter 'cell7health')",
     "type": "text",
     "required": true,
-    "default_value": "demoapp"
+    "default_value": "cell7health"
   },
   "api_key": {
     "display_name": "Freshdesk API Key",
     "description": "Your Freshdesk API Key from Profile Settings",
+    "type": "text",
+    "required": true,
+    "secure": true
+  },
+  "nocodb_token": {
+    "display_name": "NocoDB API Token",
+    "description": "API token from NocoDB settings",
     "type": "text",
     "required": true,
     "secure": true
