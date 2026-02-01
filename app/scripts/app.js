@@ -176,7 +176,6 @@ const VALIDATION_RULES = {
     description: 'Validates returned Eurocode prefix matches VIN prefix rules (warning only)',
     check: (oem, eurocode, clientName, industry, record, vin) => {
       void oem;
-      void clientName;
       void record;
       if (industry === 'US') {
         return { valid: true, info: 'VIN validation skipped (US industry)' };
@@ -202,7 +201,10 @@ const VALIDATION_RULES = {
       if (!matchedVinPrefix) {
         return { valid: true, info: `VIN "${vin}" has no specific prefix rules` };
       }
-      const allValidPrefixes = [...validEcPrefixes, 'F', 'D'];
+      const isAgcClient = (clientName || '').toUpperCase() === 'AGC';
+      const allValidPrefixes = isAgcClient
+        ? [...validEcPrefixes, 'F', 'D']
+        : [...validEcPrefixes, 'F', 'D', 'N'];
       const ecStartsWithValid = allValidPrefixes.some(prefix => ecUpper.startsWith(prefix));
       if (!ecStartsWithValid) {
         return {
