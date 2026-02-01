@@ -11,7 +11,8 @@
       "requests": {
         "updateTicket": {},
         "getTicketFields": {},
-        "queryNocoDB": {}
+        "queryNocoDB": {},
+        "queryNocoDBByOEM": {}
       }
     },
     "support_ticket": {

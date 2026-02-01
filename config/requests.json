@@ -29,5 +29,15 @@
         "xc-token": "<%= iparam.nocodb_token %>"
       }
     }
+  },
+  "queryNocoDBByOEM": {
+    "schema": {
+      "method": "GET",
+      "host": "app.nocodb.com",
+      "path": "/api/v2/tables/moeo293n3g8bj7k/records?where=(OEM1,eq,<%= context.oem %>)",
+      "headers": {
+        "xc-token": "<%= iparam.nocodb_token %>"
+      }
+    }
   }
 }

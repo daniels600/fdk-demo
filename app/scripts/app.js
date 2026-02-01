@@ -70,9 +70,9 @@ const VALIDATION_RULES = {
   clientContext: {
     name: 'Client Context',
     description: 'Reports the customer context for the lookup',
-    check: (eurocode, oem, clientName, industry, record, vin) => {
-      void eurocode;
+    check: (oem, eurocode, clientName, industry, record, vin) => {
       void oem;
+      void eurocode;
       void record;
       const customer = clientName || 'Unknown';
       const ind = industry || 'Standard';
@@ -81,31 +81,12 @@ const VALIDATION_RULES = {
     }
   },
 
-  wrongEurocode: {
-    name: 'Wrong Eurocode Check',
-    description: 'Rejects eurocodes containing exclamation mark',
-    check: (eurocode) => {
-      if (eurocode.includes('!')) {
-        return { valid: false, error: 'Invalid eurocode: contains "!" character' };
-      }
-      return { valid: true };
-    }
-  },
-
-  noNPrefix: {
-    name: 'N Prefix Master Rule',
-    description: 'Eurocode cannot start with N (except AGC clients, does not apply to US industry)',
-    check: (eurocode, oem, clientName, industry) => {
-      void oem;
-      if (industry === 'US') {
-        return { valid: true };
-      }
-      const normalizedClientName = (clientName || '').toUpperCase();
-      if (normalizedClientName === 'AGC') {
-        return { valid: true };
-      }
-      if (eurocode.toUpperCase().startsWith('N')) {
-        return { valid: false, error: 'Eurocode cannot start with "N" (Master Rule)' };
+  wrongOem: {
+    name: 'Wrong OEM Check',
+    description: 'Rejects OEM containing exclamation mark',
+    check: (oem) => {
+      if (oem.includes('!')) {
+        return { valid: false, error: 'Invalid OEM: contains "!" character' };
       }
       return { valid: true };
     }
@@ -114,7 +95,7 @@ const VALIDATION_RULES = {
   doubleOem: {
     name: 'Double OEM Check',
     description: 'Rejects if OEM is X and eurocode is also X',
-    check: (eurocode, oem) => {
+    check: (oem, eurocode) => {
       if (oem === 'X' && eurocode === 'X') {
         return { valid: false, error: 'Double OEM validation failed: both OEM and Eurocode are X' };
       }
@@ -124,21 +105,21 @@ const VALIDATION_RULES = {
 
   carglass: {
     name: 'CARGLASS Position Check',
-    description: 'For CARGLASS clients, validates 5th character is position indicator',
-    check: (eurocode, oem, clientName) => {
+    description: 'For CARGLASS clients, validates 5th character of returned eurocode is position indicator',
+    check: (oem, eurocode, clientName) => {
       void oem;
       const normalizedClientName = (clientName || '').toUpperCase();
       if (normalizedClientName !== 'CARGLASS') {
         return { valid: true };
       }
-      if (eurocode.length < 5) {
-        return { valid: false, error: 'CARGLASS validation: Eurocode too short (must be at least 5 characters)' };
+      if (!eurocode || eurocode.length < 5) {
+        return { valid: true, info: 'CARGLASS validation: Eurocode too short for position check' };
       }
       const positionChars = { A: 'FRONT', C: 'FRONT', F: 'SIDE', L: 'SIDE', R: 'SIDE', B: 'BACK', G: 'ROOF' };
       const fifthChar = eurocode.charAt(4).toUpperCase();
       const position = positionChars[fifthChar];
       if (!position) {
-        return { valid: false, error: `CARGLASS validation: 5th character "${fifthChar}" is not a valid position (need A/C/F/L/R/B/G)` };
+        return { valid: true, info: `CARGLASS: 5th character "${fifthChar}" is not a position indicator (A/C/F/L/R/B/G)` };
       }
       return { valid: true, info: `Customer is CARGLASS, position: ${position} (char: ${fifthChar})` };
     }
@@ -146,29 +127,27 @@ const VALIDATION_RULES = {
 
   agc: {
     name: 'AGC Safety Check',
-    description: 'For AGC clients, rejects if OEM/EC contains "/" or starts with "N"',
-    check: (eurocode, oem, clientName) => {
+    description: 'For AGC clients, validates OEM does not contain "/" or start with "N"',
+    check: (oem, eurocode, clientName) => {
+      void eurocode;
       const normalizedClientName = (clientName || '').toUpperCase();
       if (normalizedClientName !== 'AGC') {
         return { valid: true };
       }
-      if (eurocode.includes('/') || oem.includes('/')) {
-        return { valid: false, error: 'AGC validation: Eurocode/OEM cannot contain "/" character' };
-      }
-      if (eurocode.toUpperCase().startsWith('N')) {
-        return { valid: false, error: 'AGC validation: Eurocode cannot start with "N"' };
+      if (oem.includes('/')) {
+        return { valid: false, error: 'AGC validation: OEM cannot contain "/" character' };
       }
       if (oem.toUpperCase().startsWith('N')) {
         return { valid: false, error: 'AGC validation: OEM cannot start with "N"' };
       }
-      return { valid: true, info: 'Customer is AGC, safety checks passed' };
+      return { valid: true, info: 'Customer is AGC, OEM safety checks passed' };
     }
   },
 
   usIndustry: {
     name: 'US Industry Autofill',
     description: 'For US industry, autofills with NAGS if available',
-    check: (eurocode, oem, clientName, industry, record) => {
+    check: (oem, eurocode, clientName, industry, record) => {
       void oem;
       void clientName;
       if (industry !== 'US') {
@@ -184,8 +163,7 @@ const VALIDATION_RULES = {
   oemPrefix: {
     name: 'OEM "A" Prefix Handling',
     description: 'Handles leading "A" prefix in OEM values',
-    check: (eurocode, oem) => {
-      void eurocode;
+    check: (oem) => {
       if (oem.startsWith('A') && oem.length > 1) {
         return { valid: true, info: `OEM has "A" prefix (${oem})` };
       }
@@ -195,8 +173,8 @@ const VALIDATION_RULES = {
 
   vinEurocodeValidation: {
     name: 'VIN-Eurocode Prefix Validation',
-    description: 'Validates Eurocode prefix matches VIN prefix rules (not for US industry)',
-    check: (eurocode, oem, clientName, industry, record, vin) => {
+    description: 'Validates returned Eurocode prefix matches VIN prefix rules (warning only)',
+    check: (oem, eurocode, clientName, industry, record, vin) => {
       void oem;
       void clientName;
       void record;
@@ -205,6 +183,9 @@ const VALIDATION_RULES = {
       }
       if (!vin || vin.length < 2) {
         return { valid: true, info: 'VIN validation skipped (no VIN in ticket subject)' };
+      }
+      if (!eurocode) {
+        return { valid: true, info: 'VIN validation skipped (no eurocode returned)' };
       }
       const vinUpper = vin.toUpperCase();
       const ecUpper = eurocode.toUpperCase();
@@ -225,8 +206,8 @@ const VALIDATION_RULES = {
       const ecStartsWithValid = allValidPrefixes.some(prefix => ecUpper.startsWith(prefix));
       if (!ecStartsWithValid) {
         return {
-          valid: false,
-          error: `VIN "${matchedVinPrefix}" requires Eurocode to start with: ${allValidPrefixes.join(', ')}. Got: "${ecUpper.substring(0, 4)}"`
+          valid: true,
+          warning: `VIN "${matchedVinPrefix}" typically expects Eurocode to start with: ${allValidPrefixes.join(', ')}. Got: "${ecUpper.substring(0, 4)}"`
         };
       }
       const matchedEcPrefix = allValidPrefixes.find(prefix => ecUpper.startsWith(prefix));
@@ -235,15 +216,15 @@ const VALIDATION_RULES = {
   }
 };
 
-function applyValidationRules(eurocode, oem, clientName, industry, record, vin) {
+function applyValidationRules(oem, eurocode, clientName, industry, record, vin) {
   const errors = [];
   const warnings = [];
   const infos = [];
-  let transformedValue = oem;
+  let transformedValue = eurocode;
   let hasTransformation = false;
 
   for (const rule of Object.values(VALIDATION_RULES)) {
-    const result = rule.check(eurocode, oem, clientName, industry, record, vin);
+    const result = rule.check(oem, eurocode, clientName, industry, record, vin);
 
     if (!result.valid) {
       errors.push(`[${rule.name}] ${result.error}`);
@@ -306,9 +287,9 @@ async function renderText() {
   textElement.textContent = `Ticket is created by ${name}`;
 
   if (!listenersInitialized) {
-    const lookupEurocodeBtn = document.getElementById('lookupEurocodeBtn');
-    if (lookupEurocodeBtn) {
-      lookupEurocodeBtn.addEventListener('fwClick', lookupEurocode);
+    const lookupOEMBtn = document.getElementById('lookupOEMBtn');
+    if (lookupOEMBtn) {
+      lookupOEMBtn.addEventListener('fwClick', lookupOEM);
     }
 
     const closeTicketBtn = document.getElementById('closeTicketBtn');
@@ -319,35 +300,35 @@ async function renderText() {
   }
 }
 
-async function lookupEurocode() {
+async function lookupOEM() {
   const statusMessage = document.getElementById('statusMessage');
-  const inputElement = document.getElementById('eurocodeInput');
+  const inputElement = document.getElementById('oemInput');
   const infoDisplay = document.getElementById('infoDisplay');
-  const lookupBtn = document.getElementById('lookupEurocodeBtn');
-  const eurocode = inputElement.value.trim();
+  const lookupBtn = document.getElementById('lookupOEMBtn');
+  const oem = inputElement.value.trim();
 
-  if (!eurocode) {
-    statusMessage.textContent = 'Please enter a Eurocode';
+  if (!oem) {
+    statusMessage.textContent = 'Please enter an OEM code';
     statusMessage.style.color = 'orange';
     return;
   }
 
-  const MAX_EUROCODE_LENGTH = 50;
-  if (eurocode.length > MAX_EUROCODE_LENGTH) {
-    statusMessage.textContent = `Eurocode too long (max ${MAX_EUROCODE_LENGTH} characters)`;
+  const MAX_OEM_LENGTH = 50;
+  if (oem.length > MAX_OEM_LENGTH) {
+    statusMessage.textContent = `OEM code too long (max ${MAX_OEM_LENGTH} characters)`;
     statusMessage.style.color = 'orange';
     return;
   }
 
-  const eurocodePattern = /^[A-Za-z0-9\-_]+$/;
-  if (!eurocodePattern.test(eurocode)) {
-    statusMessage.textContent = 'Invalid Eurocode format (only letters, numbers, hyphens, underscores allowed)';
+  const oemPattern = /^[A-Za-z0-9\-_]+$/;
+  if (!oemPattern.test(oem)) {
+    statusMessage.textContent = 'Invalid OEM format (only letters, numbers, hyphens, underscores allowed)';
     statusMessage.style.color = 'orange';
     return;
   }
 
   lookupBtn.disabled = true;
-  statusMessage.textContent = 'Looking up Eurocode...';
+  statusMessage.textContent = 'Looking up OEM...';
   statusMessage.style.color = 'blue';
 
   try {
@@ -357,40 +338,42 @@ async function lookupEurocode() {
     const ticketData = await client.data.get('ticket');
     const vin = ticketData.ticket.subject || '';
 
-    const response = await client.request.invokeTemplate('queryNocoDB', {
-      context: { eurocode: encodeURIComponent(eurocode) }
+    const response = await client.request.invokeTemplate('queryNocoDBByOEM', {
+      context: { oem: encodeURIComponent(oem) }
     });
     const data = JSON.parse(response.response);
 
     if (!data.list || data.list.length === 0) {
-      statusMessage.textContent = 'No matching Eurocode found';
+      statusMessage.textContent = 'No matching OEM found in database';
       statusMessage.style.color = 'orange';
       infoDisplay.innerHTML = '';
       return;
     }
 
     const record = data.list[0];
-    const oem = record.OEM1 || '';
+    const eurocode = record.eurocode || '';
+    const manufacturer = record.Manufacten || '';
+    const model = record.Modelen || '';
     const industry = record.Industry || '';
 
-    if (!oem) {
-      statusMessage.textContent = 'Eurocode found but no OEM1 available';
+    if (!eurocode) {
+      statusMessage.textContent = 'OEM found but no Eurocode available';
       statusMessage.style.color = 'orange';
-      infoDisplay.innerHTML = `<strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>OEM1:</strong> N/A`;
+      infoDisplay.innerHTML = `<strong>OEM:</strong> ${escapeHtml(oem)}<br><strong>Eurocode:</strong> N/A`;
       return;
     }
 
-    const validation = applyValidationRules(eurocode, oem, clientName, industry, record, vin);
+    const validation = applyValidationRules(oem, eurocode, clientName, industry, record, vin);
 
     if (!validation.valid) {
       statusMessage.innerHTML = escapeHtml(validation.errors.join('\n')).replace(/\n/g, '<br>');
       statusMessage.style.color = 'red';
-      infoDisplay.innerHTML = `<strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>OEM1:</strong> ${escapeHtml(oem)}<br><strong>Status:</strong> Validation failed`;
+      infoDisplay.innerHTML = `<strong>OEM:</strong> ${escapeHtml(oem)}<br><strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>Status:</strong> Validation failed`;
       return;
     }
 
-    const displayValue = validation.transformedValue;
-    let infoHtml = `<strong>Eurocode:</strong> ${escapeHtml(eurocode)}<br><strong>OEM1:</strong> ${escapeHtml(displayValue)}`;
+    const displayEurocode = validation.transformedValue;
+    let infoHtml = `<strong>OEM:</strong> ${escapeHtml(oem)}<br><strong>Eurocode:</strong> ${escapeHtml(displayEurocode)}<br><strong>Manufacturer:</strong> ${escapeHtml(manufacturer)}<br><strong>Model:</strong> ${escapeHtml(model)}`;
     if (validation.infos.length > 0) {
       const infosHtml = validation.infos.map(i => `• ${escapeHtml(i)}`).join('<br>');
       infoHtml += `<br><br><span style="color: #666; font-size: 11px;">${infosHtml}</span>`;
@@ -401,7 +384,9 @@ async function lookupEurocode() {
 
     const updatePayload = {
       custom_fields: {
-        cf_api: displayValue
+        cf_eurocode: displayEurocode,
+        cf_manufacturer: manufacturer,
+        cf_model: model
       }
     };
 
@@ -412,14 +397,22 @@ async function lookupEurocode() {
 
     try {
       await client.interface.trigger("setValue", {
-        id: "cf_api",
-        value: displayValue
+        id: "cf_eurocode",
+        value: displayEurocode
+      });
+      await client.interface.trigger("setValue", {
+        id: "cf_manufacturer",
+        value: manufacturer
+      });
+      await client.interface.trigger("setValue", {
+        id: "cf_model",
+        value: model
       });
     } catch (uiError) {
       // UI setValue not supported in this context
     }
 
-    let successMsg = `Updated cf_api with: ${escapeHtml(displayValue)}`;
+    let successMsg = `Updated: Eurocode=${escapeHtml(displayEurocode)}, Manufacturer=${escapeHtml(manufacturer)}, Model=${escapeHtml(model)}`;
     if (validation.warnings.length > 0) {
       const warningsHtml = validation.warnings.map(w => escapeHtml(w)).join('<br>');
       successMsg += `<br><small style="color: orange;">${warningsHtml}</small>`;
@@ -433,7 +426,7 @@ async function lookupEurocode() {
     }, 5000);
 
   } catch (error) {
-    console.error('Eurocode lookup error:', error);
+    console.error('OEM lookup error:', error);
 
     let errorMsg = 'Lookup failed';
     if (error.response) {
