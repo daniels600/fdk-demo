@@ -1,10 +1,10 @@
 {
   "domain": {
     "display_name": "Freshdesk Domain",
-    "description": "Your Freshdesk subdomain (e.g., if your URL is https://cell7health.freshdesk.com, enter 'cell7health')",
+    "description": "Your Freshdesk subdomain (e.g., if your URL is https://ashesiedu.freshdesk.com, enter 'ashesiedu')",
     "type": "text",
     "required": true,
-    "default_value": "cell7health"
+    "default_value": "ashesiedu"
   },
   "api_key": {
     "display_name": "Freshdesk API Key",
