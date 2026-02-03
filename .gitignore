@@ -2,7 +2,6 @@
 .fdk/
 coverage/
 .report.json
-.vscode/
 node_modules/
 test_data/
 dist/
@@ -11,3 +10,7 @@ config/iparam_test_data.json
 log/
 
 .claude
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
+branch_structure.json

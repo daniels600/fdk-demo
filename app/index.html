@@ -12,14 +12,23 @@
 
   <body>
     <div class="main">
-      <p>AV Database Lookup</p>
-      <p id="apptext"></p>
-      <div class="button-container">
-        <fw-input id="oemInput" placeholder="Enter OEM Code" style="width: 100%;"></fw-input>
-        <fw-button id="lookupOEMBtn" color="primary" style="margin-top: 10px;">Lookup OEM</fw-button>
-        <fw-button id="closeTicketBtn" color="danger" style="margin-top: 10px;">Close Ticket</fw-button>
+      <div class="header">
+        <h1>AV Database Lookup</h1>
+        <p id="apptext"></p>
+      </div>
+
+      <div class="controls">
+        <fw-input id="oemInput" placeholder="Enter OEM Code"></fw-input>
+        <div class="button-row">
+          <fw-button id="lookupOEMBtn" color="primary">Lookup</fw-button>
+          <fw-button id="closeTicketBtn" color="danger">Close Ticket</fw-button>
+        </div>
         <p id="statusMessage"></p>
-        <div id="infoDisplay" style="margin-top: 15px; text-align: left; font-size: 12px;"></div>
+      </div>
+
+      <div class="info-container">
+        <div class="info-header">Results</div>
+        <div id="infoDisplay"></div>
       </div>
     </div>
   </body>
